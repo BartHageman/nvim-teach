@@ -8,25 +8,35 @@ local M = {}
 ---@return integer extmark_id
 function M.set_range_highlight(bufnr, ns, range, hl_group)
   hl_group = hl_group or "NvimTeachHL"
-  local end_row, end_col = range.end_row, range.end_col
-  if end_col == -1 or end_col == nil then
-    end_row = end_row + 1
-    end_col = 0
+  local anim = require("nvim-teach.animation")
+  local pulse_ok = anim.available()
+
+  local extmark_opts = { priority = 100 }
+  if pulse_ok then
+    -- Pulse paints the text columns; the tracker extmark just gives callers an
+    -- id to clear by. No hl_group / no hl_eol so the two layers don't fight
+    -- over the trailing strip past end-of-text.
+  else
+    -- Fallback: static bg only, extended past EOL so the row reads as one band.
+    local end_row, end_col = range.end_row, range.end_col
+    if end_col == -1 or end_col == nil then
+      end_row = end_row + 1
+      end_col = 0
+    end
+    extmark_opts.end_row  = end_row
+    extmark_opts.end_col  = end_col
+    extmark_opts.hl_group = hl_group
+    extmark_opts.hl_eol   = true
   end
 
-  local id = vim.api.nvim_buf_set_extmark(bufnr, ns, range.start_row, range.start_col or 0, {
-    end_row = end_row,
-    end_col = end_col,
-    hl_group = hl_group,
-    hl_eol = true,
-    priority = 100,
-  })
-  pcall(function()
-    local anim = require("nvim-teach.animation")
+  local id = vim.api.nvim_buf_set_extmark(bufnr, ns, range.start_row, range.start_col or 0, extmark_opts)
+
+  if pulse_ok then
     local name = "nvim_teach_pulse_" .. id
-    anim.pulse_start(name, bufnr, range, hl_group)
-    anim.register(name)
-  end)
+    if anim.pulse_start(name, bufnr, range, hl_group) then
+      anim.register(name)
+    end
+  end
   return id
 end
 
@@ -47,7 +57,7 @@ end
 function M.clear_bubble(bufnr, ns, bubble)
   if bubble.highlight_extmark_id then
     pcall(function()
-      require("nvim-teach.animation").pulse_stop("nvim_teach_pulse_" .. bubble.highlight_extmark_id)
+      require("nvim-teach.animation").pulse_stop("nvim_teach_pulse_" .. bubble.highlight_extmark_id, bufnr)
     end)
     pcall(vim.api.nvim_buf_del_extmark, bufnr, ns, bubble.highlight_extmark_id)
     bubble.highlight_extmark_id = nil
@@ -68,7 +78,7 @@ end
 function M.clear_range_highlight(bufnr, ns, extmark_id)
   if not extmark_id then return end
   pcall(function()
-    require("nvim-teach.animation").pulse_stop("nvim_teach_pulse_" .. extmark_id)
+    require("nvim-teach.animation").pulse_stop("nvim_teach_pulse_" .. extmark_id, bufnr)
   end)
   pcall(vim.api.nvim_buf_del_extmark, bufnr, ns, extmark_id)
 end

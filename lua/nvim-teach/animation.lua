@@ -84,15 +84,21 @@ local function peak_for(hl_group)
   return blend("#ffffff", base, 0.12)
 end
 
+--- Whether tiny-glimmer is available and our breathe effect is registered.
+function M.available()
+  return get_lib() ~= nil and register_breathe()
+end
+
 --- Anchor a named breathe over a code range. Loops indefinitely until stopped.
+--- Returns true on success, false if tiny-glimmer isn't available.
 ---@param name string  unique animation id (e.g. tostring(extmark_id))
 ---@param bufnr integer
 ---@param range table  { start_row, start_col, end_row, end_col } (0-indexed, end inclusive on rows)
 ---@param hl_group string  the highlight group whose bg color drives the pulse
 function M.pulse_start(name, bufnr, range, hl_group)
   local lib = get_lib()
-  if not lib then return end
-  if not register_breathe() then return end
+  if not lib then return false end
+  if not register_breathe() then return false end
 
   local end_col = range.end_col
   if end_col == -1 or end_col == nil then
@@ -100,26 +106,39 @@ function M.pulse_start(name, bufnr, range, hl_group)
     end_col = #last_line
   end
 
-  pcall(lib.create_named_animation, name, {
-    range = {
-      start_line = range.start_row,
-      start_col  = range.start_col or 0,
-      end_line   = range.end_row,
-      end_col    = end_col,
-    },
-    duration   = 2400,
-    from_color = hl_group,
-    to_color   = peak_for(hl_group),
-    effect     = "breathe",
-    loop       = true,
-    loop_count = 0,
-  })
+  -- tiny-glimmer keys animations off nvim_get_current_buf() at call time, so
+  -- run inside nvim_buf_call to make sure the pulse is registered against the
+  -- source buffer rather than whatever's focused (e.g. the bubble's float).
+  local ok = true
+  vim.api.nvim_buf_call(bufnr, function()
+    ok = pcall(lib.create_named_animation, name, {
+      range = {
+        start_line = range.start_row,
+        start_col  = range.start_col or 0,
+        end_line   = range.end_row,
+        end_col    = end_col,
+      },
+      duration   = 2400,
+      from_color = hl_group,
+      to_color   = peak_for(hl_group),
+      effect     = "breathe",
+      loop       = true,
+      loop_count = 0,
+    })
+  end)
+  return ok
 end
 
-function M.pulse_stop(name)
+function M.pulse_stop(name, bufnr)
   local lib = get_lib()
   if not lib then return end
-  pcall(lib.stop_animation, name)
+  if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+    vim.api.nvim_buf_call(bufnr, function()
+      pcall(lib.stop_animation, name)
+    end)
+  else
+    pcall(lib.stop_animation, name)
+  end
 end
 
 function M.stop_all()
