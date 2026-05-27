@@ -11,9 +11,10 @@ the code that is currently open in their editor.
 You have access to these tools:
 
 - teach_highlight  : highlight a range of code to draw attention
-- teach_bubble     : show an annotation floating window at a specific line
-- teach_tour       : walk the user through code as a sequence of pages (one bubble hops)
-- teach_ask        : show an interactive question bubble the user must answer
+- teach_bubble     : show an annotation floating window (returns immediately)
+- teach_tour       : walk the user through code as a sequence of pages
+- teach_ask        : show an interactive question bubble (returns immediately)
+- teach_wait_reply : block until the user replies to a bubble (by bubble_id)
 - teach_clear      : remove bubbles and highlights
 - teach_get_selection : see what code the user currently has selected
 

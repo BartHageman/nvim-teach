@@ -73,23 +73,33 @@ local function tool_to_mcp(def)
   }
 end
 
-local function call_tool(name, args)
+--- Format a tool's raw return value into MCP content shape.
+local function format_tool_result(result)
+  if type(result) == "table" and result.status == "error" then
+    return { content = { { type = "text", text = tostring(result.data or "error") } }, isError = true }
+  end
+  local payload = (type(result) == "table" and result.data) or result or vim.empty_dict()
+  return { content = { { type = "text", text = vim.json.encode(payload) } } }
+end
+
+--- Run the tool's command inside a coroutine so it can yield while waiting
+--- for user input (see mcp/async.lua). Calls `done(mcp_result)` exactly once
+--- when the tool finishes.
+local function call_tool_async(name, args, done)
   local defs = require("nvim-teach.tools").definitions()
   local def  = defs[name]
   if not def then
-    return { content = { { type = "text", text = "unknown tool: " .. name } }, isError = true }
+    done({ content = { { type = "text", text = "unknown tool: " .. name } }, isError = true })
+    return
   end
 
   -- Lazy-init the teaching session so MCP callers don't need a prior :NvimTeach.
-  -- This also installs nav keymaps (<CR>/q/]t/[t) on the buffer so bubbles are
-  -- actually interactive when driven purely from MCP.
   local session = require("nvim-teach.session")
   if not session.ns_id then
     local bufnr = vim.api.nvim_get_current_buf()
     session.init(bufnr)
     local cfg = require("nvim-teach").config or {}
     pcall(require("nvim-teach.keymaps").install_nav_keymaps, bufnr, cfg)
-    -- Set up scroll tracking on the window currently showing this buffer.
     for _, w in ipairs(vim.api.nvim_list_wins()) do
       if vim.api.nvim_win_get_buf(w) == bufnr then
         pcall(require("nvim-teach.window").setup_scroll_tracking, w, cfg)
@@ -97,93 +107,118 @@ local function call_tool(name, args)
       end
     end
   end
+
   local cmd = def.cmds and def.cmds[1]
   if not cmd then
-    return { content = { { type = "text", text = "tool has no command" } }, isError = true }
+    done({ content = { { type = "text", text = "tool has no command" } }, isError = true })
+    return
   end
 
-  local ok, result = pcall(cmd, def, args or {}, {})
-  if not ok then
-    return { content = { { type = "text", text = "error: " .. tostring(result) } }, isError = true }
+  local co = coroutine.create(function() return cmd(def, args or {}, {}) end)
+  local function step(...)
+    local ok, ret_or_setup = coroutine.resume(co, ...)
+    if not ok then
+      done({ content = { { type = "text", text = "error: " .. tostring(ret_or_setup) } }, isError = true })
+      return
+    end
+    if coroutine.status(co) == "dead" then
+      done(format_tool_result(ret_or_setup))
+    else
+      -- The tool yielded a setup function — call it with our continuation.
+      local setup_ok, setup_err = pcall(ret_or_setup, function(...) step(...) end)
+      if not setup_ok then
+        done({ content = { { type = "text", text = "error: " .. tostring(setup_err) } }, isError = true })
+      end
+    end
   end
-
-  if type(result) == "table" and result.status == "error" then
-    return { content = { { type = "text", text = tostring(result.data or "error") } }, isError = true }
-  end
-
-  local payload = (type(result) == "table" and result.data) or result or vim.empty_dict()
-  return { content = { { type = "text", text = vim.json.encode(payload) } } }
+  step()
 end
 
-local function dispatch(msg)
+--- Dispatch a single JSON-RPC method asynchronously. Calls done(result) or
+--- done(nil, err) exactly once.
+local function dispatch_async(msg, done)
   local method = msg.method
   if method == "initialize" then
-    return {
+    done({
       protocolVersion = PROTOCOL_VERSION,
       capabilities    = { tools = vim.empty_dict() },
       serverInfo      = SERVER_INFO,
-    }
+    })
   elseif method == "notifications/initialized" or method == "notifications/cancelled" then
-    return nil  -- notification, no response
+    done(nil)  -- notification, no response
   elseif method == "tools/list" then
     local out = {}
     for _, def in pairs(require("nvim-teach.tools").definitions()) do
       table.insert(out, tool_to_mcp(def))
     end
-    return { tools = out }
+    done({ tools = out })
   elseif method == "tools/call" then
     local params = msg.params or {}
-    return call_tool(params.name, params.arguments)
+    call_tool_async(params.name, params.arguments, function(result) done(result) end)
   else
-    return nil, { code = -32601, message = "method not found: " .. tostring(method) }
+    done(nil, { code = -32601, message = "method not found: " .. tostring(method) })
   end
 end
 
-local function handle_jsonrpc(body)
+--- Async JSON-RPC handler. Calls done(response_body_or_nil) when ready.
+local function handle_jsonrpc_async(body, done)
   local ok, msg = pcall(vim.json.decode, body)
   if not ok or type(msg) ~= "table" then
-    return vim.json.encode({
+    done(vim.json.encode({
       jsonrpc = "2.0", id = vim.NIL,
       error = { code = -32700, message = "parse error" },
-    })
+    }))
+    return
   end
   if msg.id == nil then
-    pcall(dispatch, msg)
-    return nil  -- notification
+    -- Notification: fire-and-forget. No response.
+    dispatch_async(msg, function() end)
+    done(nil)
+    return
   end
-  local result, err = dispatch(msg)
-  if err then
-    return vim.json.encode({ jsonrpc = "2.0", id = msg.id, error = err })
-  end
-  return vim.json.encode({ jsonrpc = "2.0", id = msg.id, result = result or vim.empty_dict() })
+  dispatch_async(msg, function(result, err)
+    if err then
+      done(vim.json.encode({ jsonrpc = "2.0", id = msg.id, error = err }))
+    else
+      done(vim.json.encode({ jsonrpc = "2.0", id = msg.id, result = result or vim.empty_dict() }))
+    end
+  end)
 end
 
 -- ─── Connection handler ────────────────────────────────────────────────────
 
-local function handle_request(req)
+--- Async request handler. Produces an HTTP response string and passes it to
+--- `done` when ready (which may be after the user replies to a bubble).
+local function handle_request_async(req, done)
   if req.method == "POST" and (req.path == "/mcp" or req.path == "/") then
-    local resp_body = handle_jsonrpc(req.body)
-    if resp_body then
-      return http_response(200, resp_body)
-    end
-    return http_response(202, "")
+    handle_jsonrpc_async(req.body, function(resp_body)
+      if resp_body then
+        done(http_response(200, resp_body))
+      else
+        done(http_response(202, ""))
+      end
+    end)
+    return
   end
-  return http_response(404, vim.json.encode({ error = "not found" }))
+  done(http_response(404, vim.json.encode({ error = "not found" })))
 end
 
 local function handle_connection(client)
   local buf = ""
+  local handled = false
   client:read_start(vim.schedule_wrap(function(err, chunk)
     if err or not chunk then
-      pcall(function() client:close() end)
+      if not handled then pcall(function() client:close() end) end
       return
     end
     buf = buf .. chunk
     local req = parse_request(buf)
-    if req then
-      local resp = handle_request(req)
-      client:write(resp, function()
-        pcall(function() client:shutdown(function() client:close() end) end)
+    if req and not handled then
+      handled = true
+      handle_request_async(req, function(resp)
+        client:write(resp, function()
+          pcall(function() client:shutdown(function() client:close() end) end)
+        end)
       end)
     end
   end))

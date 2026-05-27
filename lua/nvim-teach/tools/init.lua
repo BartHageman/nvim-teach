@@ -7,6 +7,7 @@ function M.definitions()
     teach_bubble        = require("nvim-teach.tools.teach_bubble"),
     teach_tour          = require("nvim-teach.tools.teach_tour"),
     teach_ask           = require("nvim-teach.tools.teach_ask"),
+    teach_wait_reply    = require("nvim-teach.tools.teach_wait_reply"),
     teach_clear         = require("nvim-teach.tools.teach_clear"),
     teach_get_selection = require("nvim-teach.tools.teach_get_selection"),
   }

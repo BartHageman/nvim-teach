@@ -7,7 +7,7 @@ M.schema = {
   type = "function",
   ["function"] = {
     name = "teach_bubble",
-    description = "Show an annotation bubble (floating window) at a specific line of code.",
+    description = "Show an annotation bubble (floating window) at a specific line of code. By default blocks until the user replies (<CR> then text) or dismisses (q), returning { kind = 'reply'|'dismissed', reply = text? }. Pass wait=false to return immediately with just the bubble_id.",
     parameters = {
       type = "object",
       properties = {
@@ -48,6 +48,14 @@ M.schema = {
           type = "string",
           enum = { "green", "red", "blue", "yellow", "orange", "purple" },
           description = "Background color for the line highlight. Defaults to a color derived from the callout kind (note=blue, tip=green, important=red, warning=orange, caution=red).",
+        },
+        wait = {
+          type = "boolean",
+          description = "If true (default), block until the user replies or dismisses, and return the result. If false, return immediately with just bubble_id.",
+        },
+        timeout_seconds = {
+          type = "integer",
+          description = "Max seconds to wait for a reply when wait=true. Defaults to 300.",
         },
       },
       required = { "row", "body" },
@@ -107,16 +115,50 @@ M.cmds = {
       }, hl_group)
     end
 
-    -- Open floating window.
+    -- Wire callbacks that stash the outcome on session.outcomes[bubble_id].
+    -- teach_wait_reply polls that table to retrieve the result later.
+    session.outcomes = session.outcomes or {}
+    bubble.on_reply = function(text)
+      session.outcomes[bubble.id] = { kind = "reply", text = text }
+    end
+    bubble.on_dismiss = function()
+      if not session.outcomes[bubble.id] then
+        session.outcomes[bubble.id] = { kind = "dismissed" }
+      end
+    end
+
     window.open_bubble_win(bubble, cfg)
 
     -- Register bubble (keymaps are shared via install_nav_keymaps).
     session.add_bubble(bubble)
     keymaps.install_bubble_keymaps(bufnr, bubble, cfg)
 
+    if args.wait == false then
+      return {
+        status = "success",
+        data = { bubble_id = bubble.id },
+      }
+    end
+
+    -- Block until the user replies or dismisses. async.wait_for yields the
+    -- enclosing coroutine and a libuv timer resumes it — neovim stays
+    -- responsive throughout.
+    local async = require("nvim-teach.mcp.async")
+    local timeout_s = args.timeout_seconds or 300
+    async.wait_for(function() return session.outcomes[bubble.id] ~= nil end, {
+      timeout_ms  = timeout_s * 1000,
+      interval_ms = 75,
+    })
+
+    local outcome = session.outcomes[bubble.id] or { kind = "timeout" }
+    session.outcomes[bubble.id] = nil
     return {
       status = "success",
-      data = { bubble_id = bubble.id },
+      data = {
+        bubble_id = bubble.id,
+        kind      = outcome.kind,
+        reply     = outcome.text,
+      },
     }
   end,
 }

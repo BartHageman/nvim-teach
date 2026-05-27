@@ -7,7 +7,7 @@ M.schema = {
   type = "function",
   ["function"] = {
     name = "teach_ask",
-    description = "Show an interactive question bubble that the user can answer. Waits for the user to press <CR> and type a reply.",
+    description = "Show an interactive question bubble. By default blocks until the user replies or dismisses, returning { kind, reply? }. Pass wait=false to return immediately.",
     parameters = {
       type = "object",
       properties = {
@@ -43,6 +43,14 @@ M.schema = {
         highlight = {
           type = "boolean",
           description = "Whether to highlight the anchor line. Defaults to true.",
+        },
+        wait = {
+          type = "boolean",
+          description = "If true (default), block until the user replies or dismisses. If false, return immediately with just bubble_id.",
+        },
+        timeout_seconds = {
+          type = "integer",
+          description = "Max seconds to wait for a reply when wait=true. Defaults to 300.",
         },
       },
       required = { "row", "question" },
@@ -97,6 +105,16 @@ M.cmds = {
       }, "NvimTeachQuestion")
     end
 
+    session.outcomes = session.outcomes or {}
+    bubble.on_reply = function(text)
+      session.outcomes[bubble.id] = { kind = "reply", text = text }
+    end
+    bubble.on_dismiss = function()
+      if not session.outcomes[bubble.id] then
+        session.outcomes[bubble.id] = { kind = "dismissed" }
+      end
+    end
+
     window.open_bubble_win(bubble, cfg)
     session.add_bubble(bubble)
     keymaps.install_bubble_keymaps(bufnr, bubble, cfg)
@@ -111,9 +129,29 @@ M.cmds = {
       end
     end
 
+    if args.wait == false then
+      return {
+        status = "success",
+        data = { bubble_id = bubble.id },
+      }
+    end
+
+    local async = require("nvim-teach.mcp.async")
+    local timeout_s = args.timeout_seconds or 300
+    async.wait_for(function() return session.outcomes[bubble.id] ~= nil end, {
+      timeout_ms  = timeout_s * 1000,
+      interval_ms = 75,
+    })
+
+    local outcome = session.outcomes[bubble.id] or { kind = "timeout" }
+    session.outcomes[bubble.id] = nil
     return {
       status = "success",
-      data = { bubble_id = bubble.id },
+      data = {
+        bubble_id = bubble.id,
+        kind      = outcome.kind,
+        reply     = outcome.text,
+      },
     }
   end,
 }

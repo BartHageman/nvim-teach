@@ -42,13 +42,27 @@ local function send_reply(bubble, text)
   end
 end
 
+--- Resolve where a reply should go: if the bubble has an `on_reply` callback
+--- (set by MCP tool calls awaiting input), route the reply there and dismiss
+--- the bubble. Otherwise fall back to the CodeCompanion chat.
+local function deliver_reply(bubble, text)
+  if bubble.on_reply then
+    bubble.on_reply(text)
+    local config = require("nvim-teach").config or {}
+    M.dismiss_bubble(bubble, config)
+    S().remove_bubble(bubble.id)
+  else
+    send_reply(bubble, text)
+  end
+end
+
 --- Open vim.ui.input for replying to a bubble.
 ---@param bubble table
 function M.reply(bubble)
   vim.schedule(function()
     vim.ui.input({ prompt = "Reply: " }, function(text)
       if not text or text == "" then return end
-      send_reply(bubble, text)
+      deliver_reply(bubble, text)
     end)
   end)
 end
@@ -58,7 +72,7 @@ end
 ---@param text string
 function M.reply_with_text(bubble, text)
   vim.schedule(function()
-    send_reply(bubble, text)
+    deliver_reply(bubble, text)
   end)
 end
 
@@ -273,6 +287,12 @@ function M.dismiss_bubble(bubble, config)
   local hl = require("nvim-teach.highlight")
   hl.clear_bubble(bubble.bufnr, S().ns_id, bubble)
   bubble.is_dismissed = true
+  if bubble.on_dismiss then
+    -- Snapshot then clear so we never call it twice.
+    local cb = bubble.on_dismiss
+    bubble.on_dismiss = nil
+    pcall(cb)
+  end
 end
 
 --- Remove all keymaps set by install_nav_keymaps.
