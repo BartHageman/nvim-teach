@@ -14,13 +14,20 @@ function M.set_range_highlight(bufnr, ns, range, hl_group)
     end_col = 0
   end
 
-  return vim.api.nvim_buf_set_extmark(bufnr, ns, range.start_row, range.start_col or 0, {
+  local id = vim.api.nvim_buf_set_extmark(bufnr, ns, range.start_row, range.start_col or 0, {
     end_row = end_row,
     end_col = end_col,
     hl_group = hl_group,
     hl_eol = true,
     priority = 100,
   })
+  pcall(function()
+    local anim = require("nvim-teach.animation")
+    local name = "nvim_teach_pulse_" .. id
+    anim.pulse_start(name, bufnr, range, hl_group)
+    anim.register(name)
+  end)
+  return id
 end
 
 --- Place a gutter sign on a single row.
@@ -39,6 +46,9 @@ end
 --- Clear extmarks belonging to a specific bubble (by stored extmark IDs).
 function M.clear_bubble(bufnr, ns, bubble)
   if bubble.highlight_extmark_id then
+    pcall(function()
+      require("nvim-teach.animation").pulse_stop("nvim_teach_pulse_" .. bubble.highlight_extmark_id)
+    end)
     pcall(vim.api.nvim_buf_del_extmark, bufnr, ns, bubble.highlight_extmark_id)
     bubble.highlight_extmark_id = nil
   end
@@ -51,6 +61,7 @@ end
 --- Clear every extmark in the namespace (used for clear-all).
 function M.clear_all(bufnr, ns)
   vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
+  pcall(function() require("nvim-teach.animation").stop_all() end)
 end
 
 --- Parse "#rrggbb" into r,g,b integers.
@@ -74,13 +85,13 @@ local function normal_bg_hex()
 end
 
 --- Register the plugin's default highlight groups.
---- Called once from init.lua on setup.
+--- Called once from init.lua on setup, and again on ColorScheme.
+--- Force-sets every group — these names are plugin-private so we don't risk
+--- stomping on the colorscheme. Skipping when "already exists" was leaving
+--- groups cleared (empty dict) and breaking bubble bgs.
 function M.define_highlights()
-  -- Only define if not already set by the colorscheme.
   local function def(name, opts)
-    if vim.fn.hlexists(name) == 0 then
-      vim.api.nvim_set_hl(0, name, opts)
-    end
+    vim.api.nvim_set_hl(0, name, opts)
   end
 
   -- Tint bubble bgs by blending each accent color into Normal's bg.
@@ -90,7 +101,7 @@ function M.define_highlights()
 
   -- Accent colors per callout. Tweaked toward user prefs:
   --   note=blue, tip=green, important=red, warning=orange, caution=maroon.
-  local accents = {
+  local callout_accents = {
     note      = "#89b4fa",
     tip       = "#a6e3a1",
     important = "#f38ba8",
@@ -107,21 +118,28 @@ function M.define_highlights()
   def("NvimTeachFooter",   { fg = "#6c7086", italic = true })
   def("NvimTeachRule",     { fg = blend("#cdd6f4", base, 0.4) })
 
-  -- Highlight bg palette. The LLM picks a color via the `highlight_color`
-  -- tool param; each name maps to one of these groups.
-  local hl_bgs = {
-    green  = "#2d4a3e",
-    red    = "#4a2d33",
-    blue   = "#2d3a4a",
-    yellow = "#4a432d",
-    orange = "#4a3a2d",
-    purple = "#3a2d4a",
+  -- Highlight bg palette. Borrow accent colors from terminal colors so the
+  -- bands pick up the user's colorscheme, with sensible hardcoded fallbacks.
+  local function term_color(n, fallback)
+    local v = vim.g["terminal_color_" .. n]
+    if type(v) == "string" and v:match("^#%x%x%x%x%x%x$") then return v end
+    return fallback
+  end
+  local accents = {
+    red    = term_color(1, "#f38ba8"),
+    green  = term_color(2, "#a6e3a1"),
+    yellow = term_color(3, "#f9e2af"),
+    blue   = term_color(4, "#89b4fa"),
+    purple = term_color(5, "#cba6f7"),
+    -- Orange isn't an ANSI slot (9 is bright red by spec). Always hardcode.
+    orange = "#fab387",
   }
-  for name, bg in pairs(hl_bgs) do
-    def("NvimTeachHL" .. name:sub(1, 1):upper() .. name:sub(2), { bg = bg, fg = "NONE" })
+  for name, accent in pairs(accents) do
+    def("NvimTeachHL" .. name:sub(1, 1):upper() .. name:sub(2),
+        { bg = blend(accent, base, 0.22), fg = "NONE" })
   end
 
-  for kind, accent in pairs(accents) do
+  for kind, accent in pairs(callout_accents) do
     local title = kind:sub(1, 1):upper() .. kind:sub(2)
     local bg = blend(accent, base, 0.18)
     def("NvimTeachCallout" .. title,       { fg = accent, bold = true })

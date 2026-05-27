@@ -197,15 +197,40 @@ function M.start(opts)
   local host = opts.host or "127.0.0.1"
   local port = opts.port or 7777
 
-  server_handle = uv.new_tcp()
-  server_handle:bind(host, port)
-  server_handle:listen(16, function(listen_err)
-    if listen_err then return end
+  local handle = uv.new_tcp()
+  local ok, err = handle:bind(host, port)
+  if not ok then
+    pcall(function() handle:close() end)
+    vim.notify(
+      ("[nvim-teach] MCP bind failed on %s:%d — %s"):format(host, port, tostring(err)),
+      vim.log.levels.ERROR
+    )
+    return nil
+  end
+  local listen_ok, listen_err = handle:listen(16, function(le)
+    if le then return end
     local client = uv.new_tcp()
-    server_handle:accept(client)
+    handle:accept(client)
     vim.schedule(function() handle_connection(client) end)
   end)
-  bound_port = server_handle:getsockname().port
+  if not listen_ok then
+    pcall(function() handle:close() end)
+    vim.notify(
+      ("[nvim-teach] MCP listen failed — %s"):format(tostring(listen_err)),
+      vim.log.levels.ERROR
+    )
+    return nil
+  end
+
+  local sockname = handle:getsockname()
+  if not sockname then
+    pcall(function() handle:close() end)
+    vim.notify("[nvim-teach] MCP getsockname() returned nil after bind", vim.log.levels.ERROR)
+    return nil
+  end
+
+  server_handle = handle
+  bound_port = sockname.port
 
   vim.notify(("[nvim-teach] MCP server on http://%s:%d/mcp"):format(host, bound_port),
              vim.log.levels.INFO)
