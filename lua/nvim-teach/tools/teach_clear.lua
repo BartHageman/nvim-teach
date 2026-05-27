@@ -62,6 +62,7 @@ M.cmds = {
       local bufnr = session.bufnr or 0
       highlight.clear_all(bufnr, session.ns_id)
       session.bubbles = {}
+      session.active_highlight = nil
     end
 
     return { status = "success", data = {} }

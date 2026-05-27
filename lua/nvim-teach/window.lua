@@ -9,10 +9,24 @@ local function get_session()
   return session
 end
 
+--- Normalize escape sequences that arrive as two-character literals in JSON
+--- from the LLM (\n, \t, \r). Done at the rendering boundary so a future client
+--- that sends real newlines still renders correctly.
+---@param s string|nil
+---@return string|nil
+local function unescape(s)
+  if s == nil then return nil end
+  s = s:gsub("\\n", "\n")
+  s = s:gsub("\\t", "\t")
+  s = s:gsub("\\r", "")
+  return s
+end
+
 --- Wrap a string to fit within max_width, splitting on word boundaries.
 ---@return string[]
 local function wrap_text(text, max_width)
   local lines = {}
+  text = unescape(text) or ""
   for _, raw_line in ipairs(vim.split(text, "\n", { plain = true })) do
     if #raw_line <= max_width then
       lines[#lines + 1] = raw_line
@@ -50,10 +64,7 @@ local function footer_for(bubble)
     end
     return string.format("[%d/%d · <CR> next · q quit]", cur, total)
   end
-  if bubble.kind == "question" then
-    return "[<CR> answer · q dismiss]"
-  end
-  return "[<CR> reply · q dismiss]"
+  return "[<CR>/q dismiss]"
 end
 
 --- Build the rendered lines and per-line highlight spans for a bubble.
@@ -75,7 +86,8 @@ local function build_bubble_render(bubble, max_width)
   lines[#lines + 1] = ""
 
   -- Header line: "  <icon>  TITLE"
-  local title = bubble.title or "Note"
+  local title = unescape(bubble.title) or "Note"
+  title = title:gsub("\n", " ")
   local header = PAD_LEFT .. glyph .. "  " .. title
   lines[#lines + 1] = header
   do
@@ -146,7 +158,13 @@ end
 --- Modifies bubble.winid and bubble.win_bufnr in-place.
 ---@param bubble table
 ---@param config table  plugin config (for float.border, float.max_width, etc.)
-function M.open_bubble_win(bubble, config)
+---@param opts? table   { jump_cursor: boolean }  — when true (default) the source
+---                      window's cursor moves to the anchor row so the bubble is
+---                      guaranteed visible. Scroll-tracking re-opens pass false
+---                      to avoid feedback with user-driven scrolling.
+function M.open_bubble_win(bubble, config, opts)
+  opts = opts or {}
+  local jump_cursor = opts.jump_cursor ~= false
   local max_width = (config.float and config.float.max_width) or 60
   local max_height = (config.float and config.float.max_height) or 20
   local border = (config.float and config.float.border) or "rounded"
@@ -168,6 +186,14 @@ function M.open_bubble_win(bubble, config)
     end
   end
   if not source_win then return end
+
+  -- Jump the cursor to the anchor so the bubble is always visible. Skipped by
+  -- the scroll-tracking reopen path to avoid scroll feedback loops.
+  if jump_cursor then
+    local line_count = vim.api.nvim_buf_line_count(bubble.bufnr)
+    local target_row = math.min(bubble.anchor_row + 1, line_count)
+    pcall(vim.api.nvim_win_set_cursor, source_win, { target_row, 0 })
+  end
 
   local screen_row = screen_row_for(source_win, bubble.anchor_row)
   if not screen_row then
@@ -231,7 +257,8 @@ function M.open_bubble_win(bubble, config)
     if bubble.pages then
       keymaps.advance_tour(bubble, config)
     else
-      keymaps.reply(bubble)
+      keymaps.dismiss_bubble(bubble, config)
+      get_session().remove_bubble(bubble.id)
     end
   end, kmap_opts)
   vim.keymap.set("n", dismiss_key, function()
@@ -281,9 +308,10 @@ function M.setup_scroll_tracking(source_win, config)
         local on_screen = screen_row_for(source_win, bubble.anchor_row) ~= nil
 
         if on_screen then
-          -- Reopen if closed due to previous scroll.
+          -- Reopen if closed due to previous scroll. Don't jump the cursor —
+          -- the user is the one scrolling.
           if not bubble.winid or not vim.api.nvim_win_is_valid(bubble.winid) then
-            M.open_bubble_win(bubble, config)
+            M.open_bubble_win(bubble, config, { jump_cursor = false })
           end
         else
           -- Hide when scrolled off.

@@ -124,14 +124,7 @@ M.cmds = {
       bubble.highlight_extmark_id = highlight.set_range_highlight(bufnr, session.ns_id, range, hl_group)
     end
 
-    -- Jump cursor to first anchor so the float lands in view.
-    for _, w in ipairs(vim.api.nvim_list_wins()) do
-      if vim.api.nvim_win_get_buf(w) == bufnr then
-        pcall(vim.api.nvim_win_set_cursor, w, { bubble.anchor_row + 1, 0 })
-        break
-      end
-    end
-
+    -- open_bubble_win jumps the cursor to the anchor.
     window.open_bubble_win(bubble, cfg)
     session.add_bubble(bubble)
 

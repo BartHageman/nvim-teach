@@ -64,6 +64,15 @@ function M.clear_all(bufnr, ns)
   pcall(function() require("nvim-teach.animation").stop_all() end)
 end
 
+--- Clear a single range-highlight extmark by id, stopping its pulse animation.
+function M.clear_range_highlight(bufnr, ns, extmark_id)
+  if not extmark_id then return end
+  pcall(function()
+    require("nvim-teach.animation").pulse_stop("nvim_teach_pulse_" .. extmark_id)
+  end)
+  pcall(vim.api.nvim_buf_del_extmark, bufnr, ns, extmark_id)
+end
+
 --- Parse "#rrggbb" into r,g,b integers.
 local function parse_hex(h)
   return tonumber(h:sub(2, 3), 16), tonumber(h:sub(4, 5), 16), tonumber(h:sub(6, 7), 16)

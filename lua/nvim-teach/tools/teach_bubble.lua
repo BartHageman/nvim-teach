@@ -1,13 +1,25 @@
 -- teach_bubble: LLM tool to place an annotation bubble at a code location.
+-- Read-only annotation: bubbles never collect user input. All replies come
+-- through the chat on a subsequent turn.
 local M = {}
 
 M.name = "teach_bubble"
+
+local DESCRIPTION = [[Place a read-only annotation bubble (floating window) at a code line. Returns immediately with the bubble_id; the bubble cannot collect user input.
+
+User input always arrives through the chat on a later turn. Pick one of these pacing patterns deliberately:
+
+  1. Single bubble, then yield: post one bubble whose body asks a question or invites a reply (e.g. "What do you think this does? Reply in chat."), then end your turn and wait for the user's next chat message.
+  2. Multi-bubble sequence: post several bubbles in one turn to walk through code, then end your turn. The user reads them and dismisses each with <CR>; nothing is sent back automatically.
+  3. No bubble, just highlight: use teach_highlight to mark code and ask your question in the chat directly.
+
+Bubbles never return user replies via the tool result. The cursor jumps to the bubble's anchor row when it opens, so the bubble is guaranteed visible.]]
 
 M.schema = {
   type = "function",
   ["function"] = {
     name = "teach_bubble",
-    description = "Show an annotation bubble (floating window) at a specific line of code. By default blocks until the user replies (<CR> then text) or dismisses (q), returning { kind = 'reply'|'dismissed', reply = text? }. Pass wait=false to return immediately with just the bubble_id.",
+    description = DESCRIPTION,
     parameters = {
       type = "object",
       properties = {
@@ -47,15 +59,7 @@ M.schema = {
         highlight_color = {
           type = "string",
           enum = { "green", "red", "blue", "yellow", "orange", "purple" },
-          description = "Background color for the line highlight. Defaults to a color derived from the callout kind (note=blue, tip=green, important=red, warning=orange, caution=red).",
-        },
-        wait = {
-          type = "boolean",
-          description = "If true (default), block until the user replies or dismisses, and return the result. If false, return immediately with just bubble_id.",
-        },
-        timeout_seconds = {
-          type = "integer",
-          description = "Max seconds to wait for a reply when wait=true. Defaults to 300.",
+          description = "Background color for the line highlight. Defaults to a color derived from the callout kind.",
         },
       },
       required = { "row", "body" },
@@ -68,13 +72,7 @@ M.opts = {
   requires_approval_after = false,
 }
 
-M.system_prompt = [[
-Use teach_bubble to place an annotation bubble on a specific line of code.
-The user will see a floating window with your annotation text.
-They can press <CR> to reply to the bubble or q to dismiss it.
-Wait for the user to respond before placing the next bubble.
-All row numbers are 0-indexed.
-]]
+M.system_prompt = DESCRIPTION
 
 M.cmds = {
   function(self, args, _opts)
@@ -84,7 +82,6 @@ M.cmds = {
     local window    = require("nvim-teach.window")
     local keymaps   = require("nvim-teach.keymaps")
 
-    -- We need the config; retrieve it from the main module.
     local cfg = require("nvim-teach").config or {}
 
     local bufnr = args.bufnr or session.bufnr or 0
@@ -102,10 +99,8 @@ M.cmds = {
       icon_codepoint = args.icon_codepoint,
     })
 
-    -- Gutter sign.
     bubble.sign_extmark_id = highlight.set_sign(bufnr, session.ns_id, row, cfg.sign_text)
 
-    -- Optional line highlight.
     if args.highlight ~= false then
       local callouts = require("nvim-teach.callouts")
       local hl_group = callouts.highlight_hl_group(args.highlight_color, args.callout)
@@ -115,58 +110,20 @@ M.cmds = {
       }, hl_group)
     end
 
-    -- Wire callbacks that stash the outcome on session.outcomes[bubble_id].
-    -- teach_wait_reply polls that table to retrieve the result later.
-    session.outcomes = session.outcomes or {}
-    bubble.on_reply = function(text)
-      session.outcomes[bubble.id] = { kind = "reply", text = text }
-    end
-    bubble.on_dismiss = function()
-      if not session.outcomes[bubble.id] then
-        session.outcomes[bubble.id] = { kind = "dismissed" }
-      end
-    end
-
     window.open_bubble_win(bubble, cfg)
 
-    -- Register bubble (keymaps are shared via install_nav_keymaps).
     session.add_bubble(bubble)
     keymaps.install_bubble_keymaps(bufnr, bubble, cfg)
 
-    if args.wait == false then
-      return {
-        status = "success",
-        data = { bubble_id = bubble.id },
-      }
-    end
-
-    -- Block until the user replies or dismisses. async.wait_for yields the
-    -- enclosing coroutine and a libuv timer resumes it — neovim stays
-    -- responsive throughout.
-    local async = require("nvim-teach.mcp.async")
-    local timeout_s = args.timeout_seconds or 300
-    async.wait_for(function() return session.outcomes[bubble.id] ~= nil end, {
-      timeout_ms  = timeout_s * 1000,
-      interval_ms = 75,
-    })
-
-    local outcome = session.outcomes[bubble.id] or { kind = "timeout" }
-    session.outcomes[bubble.id] = nil
     return {
       status = "success",
-      data = {
-        bubble_id = bubble.id,
-        kind      = outcome.kind,
-        reply     = outcome.text,
-      },
+      data = { bubble_id = bubble.id },
     }
   end,
 }
 
 M.output = {
-  success = function(self, stdout, meta)
-    -- The float is the output; no chat message needed.
-  end,
+  success = function(self, stdout, meta) end,
   error = function(self, stderr, meta)
     vim.notify("[nvim-teach] teach_bubble error: " .. tostring(stderr[1]), vim.log.levels.ERROR)
   end,

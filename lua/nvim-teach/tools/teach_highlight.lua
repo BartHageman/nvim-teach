@@ -7,7 +7,7 @@ M.schema = {
   type = "function",
   ["function"] = {
     name = "teach_highlight",
-    description = "Highlight a range of code in the editor to draw the user's attention.",
+    description = "Highlight a range of code to draw the user's attention. Only one teach_highlight range can exist at a time — calling this tool automatically clears any previous range highlight. Bubble line highlights are separate and are not affected.",
     parameters = {
       type = "object",
       properties = {
@@ -82,9 +82,21 @@ M.cmds = {
       range = treesitter.expand_range_to_node(bufnr, range, args.node_type)
     end
 
+    -- Enforce one-highlight-at-a-time: clear the previous teach_highlight range
+    -- before placing the new one.
+    if session.active_highlight then
+      highlight.clear_range_highlight(
+        session.active_highlight.bufnr,
+        session.ns_id,
+        session.active_highlight.extmark_id
+      )
+      session.active_highlight = nil
+    end
+
     local callouts = require("nvim-teach.callouts")
     local hl_group = callouts.highlight_hl_group(args.highlight_color, nil)
     local eid = highlight.set_range_highlight(bufnr, session.ns_id, range, hl_group)
+    session.active_highlight = { bufnr = bufnr, extmark_id = eid }
 
     local should_animate = args.animate ~= false
     if should_animate then

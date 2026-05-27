@@ -6,6 +6,9 @@ local M = {
   chat = nil,        -- reference to active CodeCompanion chat object
   pending_selection = nil,  -- { text, range, node_type } set by visual-ask keymap
   _bubble_counter = 0,
+  -- Active range highlight created by teach_highlight (only one at a time).
+  -- Bubble anchor line highlights are tracked per-bubble and not counted here.
+  active_highlight = nil,  -- { bufnr, extmark_id } | nil
 }
 
 function M.init(bufnr)
@@ -15,6 +18,7 @@ function M.init(bufnr)
   M.chat = nil
   M.pending_selection = nil
   M._bubble_counter = 0
+  M.active_highlight = nil
 end
 
 function M.reset()
@@ -23,6 +27,7 @@ function M.reset()
   M.chat = nil
   M.pending_selection = nil
   M._bubble_counter = 0
+  M.active_highlight = nil
 end
 
 function M.next_id()
