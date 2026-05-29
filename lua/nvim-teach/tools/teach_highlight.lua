@@ -13,7 +13,11 @@ M.schema = {
       properties = {
         bufnr = {
           type = "integer",
-          description = "Buffer number. 0 = current buffer. Omit to use the teaching session buffer.",
+          description = "Target buffer number (from teach_list_buffers). Required unless `path` is given.",
+        },
+        path = {
+          type = "string",
+          description = "Target buffer's file path (alternative to bufnr; more robust across sessions). Required unless `bufnr` is given. Must match a buffer that is currently loaded.",
         },
         start_row = {
           type = "integer",
@@ -69,7 +73,10 @@ M.cmds = {
     local treesitter = require("nvim-teach.treesitter")
     local animation = require("nvim-teach.animation")
 
-    local bufnr = args.bufnr or session.bufnr or 0
+    local bufnr, err = require("nvim-teach.bufref").resolve(args)
+    if not bufnr then
+      return { status = "error", data = err }
+    end
     local range = {
       start_row = args.start_row or 0,
       start_col = args.start_col or 0,

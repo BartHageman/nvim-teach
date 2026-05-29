@@ -59,10 +59,11 @@ local function footer_for(bubble)
   if bubble.pages then
     local total = #bubble.pages
     local cur   = bubble.current_page or 1
+    local back  = cur > 1 and " · <BS> back" or ""
     if cur >= total then
-      return string.format("[%d/%d · <CR> done · q quit]", cur, total)
+      return string.format("[%d/%d · <CR> done%s · q quit]", cur, total, back)
     end
-    return string.format("[%d/%d · <CR> next · q quit]", cur, total)
+    return string.format("[%d/%d · <CR> next%s · q quit]", cur, total, back)
   end
   return "[<CR>/q dismiss]"
 end
@@ -250,6 +251,7 @@ function M.open_bubble_win(bubble, config, opts)
   -- the bubble whether the cursor is in the source buffer or the bubble.
   local km = (config.keymaps or {})
   local reply_key   = km.reply   or "<CR>"
+  local back_key    = km.back    or "<BS>"
   local dismiss_key = km.dismiss or "q"
   local kmap_opts = { buffer = buf, silent = true, nowait = true }
   vim.keymap.set("n", reply_key, function()
@@ -260,6 +262,10 @@ function M.open_bubble_win(bubble, config, opts)
       keymaps.dismiss_bubble(bubble, config)
       get_session().remove_bubble(bubble.id)
     end
+  end, kmap_opts)
+  vim.keymap.set("n", back_key, function()
+    if not bubble.pages then return end
+    require("nvim-teach.keymaps").rewind_tour(bubble, config)
   end, kmap_opts)
   vim.keymap.set("n", dismiss_key, function()
     local keymaps = require("nvim-teach.keymaps")

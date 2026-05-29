@@ -8,13 +8,17 @@ M.schema = {
   type = "function",
   ["function"] = {
     name = "teach_tour",
-    description = "Create a multi-page tour. One bubble hops between anchor rows as the user advances with <CR>. Final page dismisses on <CR>.",
+    description = "Create a multi-page tour. One bubble hops between anchor rows as the user advances with <CR>, steps back with <BS>, or quits with q. Final page dismisses on <CR>.",
     parameters = {
       type = "object",
       properties = {
         bufnr = {
           type = "integer",
-          description = "Buffer number. 0 = current. Omit for session buffer.",
+          description = "Target buffer number (from teach_list_buffers). Required unless `path` is given.",
+        },
+        path = {
+          type = "string",
+          description = "Target buffer's file path (alternative to bufnr; more robust across sessions). Required unless `bufnr` is given. Must match a buffer that is currently loaded.",
         },
         pages = {
           type = "array",
@@ -74,7 +78,8 @@ M.opts = {
 M.system_prompt = [[
 Use teach_tour to lead the user through code as a sequence of pages.
 Each page anchors at a row and gets a title + body. The user presses <CR>
-to advance to the next page (the bubble moves) or q to quit. Order pages
+to advance to the next page (the bubble moves), <BS> to step back to the
+previous page if they missed something, or q to quit. Order pages
 in reading order. Pick a callout kind per page (note/tip/important/warning/caution)
 to match the content's emphasis.
 ]]
@@ -90,10 +95,13 @@ M.cmds = {
 
     local pages = args.pages or {}
     if #pages == 0 then
-      return { status = "error", data = { message = "teach_tour requires at least one page" } }
+      return { status = "error", data = "teach_tour requires at least one page" }
     end
 
-    local bufnr = args.bufnr or session.bufnr or 0
+    local bufnr, err = require("nvim-teach.bufref").resolve(args)
+    if not bufnr then
+      return { status = "error", data = err }
+    end
     local first = pages[1]
 
     local bubble = bubble_m.new({

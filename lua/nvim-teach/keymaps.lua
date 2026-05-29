@@ -66,6 +66,7 @@ function M.install_nav_keymaps(source_bufnr, config)
   local prev_key    = km.prev         or "[t"
   local dismiss_key = km.dismiss      or "q"
   local reply_key   = km.reply        or "<CR>"
+  local back_key    = km.back         or "<BS>"
   local ask_sel_key = km.ask_selection or "<leader>ta"
 
   local opts = { buffer = source_bufnr, silent = true, nowait = false }
@@ -112,6 +113,14 @@ function M.install_nav_keymaps(source_bufnr, config)
       M.dismiss_bubble(bubble, config)
       S().remove_bubble(bubble.id)
     end
+  end, opts)
+
+  -- <BS> — rewind tour to previous page
+  vim.keymap.set("n", back_key, function()
+    local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+    local bubble = S().nearest_bubble(row)
+    if not bubble or not bubble.pages then return end
+    M.rewind_tour(bubble, config)
   end, opts)
 
   -- q — dismiss nearest bubble
@@ -210,6 +219,18 @@ function M.advance_tour(bubble, config)
   apply_page(bubble, bubble.pages[next_idx], config)
 end
 
+--- Rewind a tour bubble to the previous page. No-op on the first page.
+function M.rewind_tour(bubble, config)
+  if not bubble.pages then return end
+  local prev_idx = (bubble.current_page or 1) - 1
+  if prev_idx < 1 then
+    vim.notify("[nvim-teach] Already at first step.", vim.log.levels.INFO)
+    return
+  end
+  bubble.current_page = prev_idx
+  apply_page(bubble, bubble.pages[prev_idx], config)
+end
+
 --- Dismiss a bubble: close its float, clear its extmarks, mark as dismissed.
 function M.dismiss_bubble(bubble, config)
   W().close_bubble_win(bubble)
@@ -226,6 +247,7 @@ function M.remove_nav_keymaps(source_bufnr, config)
     km.prev         or "[t",
     km.dismiss      or "q",
     km.reply        or "<CR>",
+    km.back         or "<BS>",
   }
   for _, k in ipairs(keys) do
     pcall(vim.keymap.del, "n", k, { buffer = source_bufnr })

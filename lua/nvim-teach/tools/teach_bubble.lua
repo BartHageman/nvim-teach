@@ -25,7 +25,11 @@ M.schema = {
       properties = {
         bufnr = {
           type = "integer",
-          description = "Buffer number. 0 = current. Omit for session buffer.",
+          description = "Target buffer number (from teach_list_buffers). Required unless `path` is given.",
+        },
+        path = {
+          type = "string",
+          description = "Target buffer's file path (alternative to bufnr; more robust across sessions). Required unless `bufnr` is given. Must match a buffer that is currently loaded.",
         },
         row = {
           type = "integer",
@@ -84,7 +88,10 @@ M.cmds = {
 
     local cfg = require("nvim-teach").config or {}
 
-    local bufnr = args.bufnr or session.bufnr or 0
+    local bufnr, err = require("nvim-teach.bufref").resolve(args)
+    if not bufnr then
+      return { status = "error", data = err }
+    end
     local row   = args.row   or 0
     local col   = args.col   or 0
 

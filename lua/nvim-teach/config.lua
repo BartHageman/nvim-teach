@@ -6,6 +6,7 @@ M.defaults = {
   animate = true,
   keymaps = {
     reply = "<CR>",
+    back = "<BS>",
     next = "]t",
     prev = "[t",
     dismiss = "q",
